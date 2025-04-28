@@ -157,23 +157,22 @@ class FlowMatchingSolver:
         x = x0.clone()
         traj = torch.zeros(N, self.Nt+1, nx, device=self.device)
         traj[:, 0, :] = x
-        dW = torch.randn(self.Nt, nx, device=self.device) * self.dt
-        noise_integral_term = torch.zeros(nx, device=self.device)
-        for k, t in enumerate(self.t_grid[1:]): #x0 is known already
+        dW = torch.randn(self.Nt, nx, device=self.device)
+        for k, t in enumerate(self.t_grid[1:]): 
+            noise_integral_term = torch.zeros([N, nx], device=self.device)
             for m, tau in enumerate(self.t_grid[:k+1]):
                 Phi_t_tau = self.compute_Phi(t, tau)
-                noise_integral_term += Phi_t_tau @ dW[m]
+                noise_integral_term += Phi_t_tau @ dW[m]*self.dt
             noise_term = math.sqrt(self.epsilon)*noise_integral_term
-            features = torch.cat([x0, t.unsqueeze(0).repeat(N,1), noise_term.repeat(N,1)], dim=1)
+            features = torch.cat([x0, t.unsqueeze(0).repeat(N,1), noise_term], dim=1)
             u = self.control_model(features.unsqueeze(1))
             M_t = self.M(t)
-            control_integral_term = torch.zeros([nx,1], device=self.device)
+            control_integral_term = torch.zeros([N, nx], device=self.device)
             for m, tau in enumerate(self.t_grid[:k+1]):
                 Phi_t_tau = self.compute_Phi(t, tau)
-                control_integral_term += Phi_t_tau@(u.T)*self.dt
-
-            x = M_t@x0.T + control_integral_term + noise_term.unsqueeze(1)
-            traj[:, k+1, :] = x.T
+                control_integral_term += (Phi_t_tau@(u.T)).T*self.dt
+            x = (M_t@x0.T).T + control_integral_term + noise_term
+            traj[:, k+1, :] = x
         return traj, self.t_grid
 
 if __name__ == "__main__":
@@ -210,7 +209,9 @@ if __name__ == "__main__":
     print("Start LSTM training")
     solver.train_control_law(X, Y)
     print("Test and get the trajectory with learned control")
-    traj, t_grid = solver.simulate_x(x0_samples)
+    n_sample = 100
+    x0_test = torch.zeros([n_sample, nx])
+    traj, t_grid = solver.simulate_x(x0_test)
     print("Simulation done. Start to plot graph")
     plot_trajectories(traj, t_grid)
     print('Figure saved in the results folder')
