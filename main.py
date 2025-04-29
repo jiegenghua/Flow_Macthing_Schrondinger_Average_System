@@ -21,6 +21,8 @@ class FlowMatchingSolver:
                  B_fn,
                  mu0,       # initial distribution
                  muf,       # target distribution
+                 nx,        # dimension of state
+                 nu,        # dimension of control input
                  epsilon=1e-2,
                  tf=1.0,
                  time_steps=100, # time steps for [0, tf]
@@ -30,6 +32,8 @@ class FlowMatchingSolver:
         self.B_fn = B_fn
         self.mu0 = mu0
         self.muf = muf
+        self.nx = nx
+        self.nu = nu
         self.epsilon = epsilon
         self.tf = tf   # terminal time
         self.Nt = time_steps
@@ -42,17 +46,16 @@ class FlowMatchingSolver:
         '''
         Phi(t, tau)
         '''
-        def integrand(theta):
-            A = self.A_fn(theta)
-            B = self.B_fn(theta)
-            return torch.matrix_exp(A * (t-tau)) @ B
-        return avg_over_theta(integrand, self.thetas)
+        A = torch.stack([self.A_fn(theta) for theta in self.thetas])
+        B = torch.stack([self.B_fn(theta) for theta in self.thetas])
+        Phi = torch.matrix_exp(A*(t-tau))@B
+        return Phi.mean(dim=0)
 
     def compute_G(self, t):
         '''
         G(tf, t)
         '''
-        G = torch.zeros_like(self.compute_Phi(self.tf, self.t_grid[0]) @ self.compute_Phi(self.tf, self.t_grid[0]).T)
+        G = torch.zeros(self.nx, self.nx, device=self.device)
         for tau in self.t_grid:
             if tau >= t:
                 Phi = self.compute_Phi(self.tf, tau)
@@ -66,13 +69,10 @@ class FlowMatchingSolver:
 
     def compute_control_trajectories(self, x0, xf):
         # returns u_z trajectories: shape [N, Nt+1, dim]
-        N, nu = x0.shape
-        u_z = torch.zeros(N, self.Nt+1, nu, device=self.device)
+        N, nx = x0.shape
+        u_z = torch.zeros(N, self.Nt+1, self.nu, device=self.device)
         for i in range(N): # for every sample
             dW = torch.randn(self.Nt, nu, device=self.device) * math.sqrt(self.dt)
-            Wint = torch.zeros(self.Nt+1, nu, device=self.device)
-            for k in range(1, self.Nt+1):
-                Wint[k] = Wint[k-1] + dW[k-1]
             for k, t in enumerate(self.t_grid): # for every time step
                 Phi_tf_t = self.compute_Phi(self.tf, t)
                 G_tf_0 = self.compute_G(0)
@@ -85,21 +85,15 @@ class FlowMatchingSolver:
                     integrand = Phi_tf_t.T @ G_tf_tau_inv @ Phi_tf_tau
                     integral_term += integrand @ dW[m]
                 term1 = -math.sqrt(self.epsilon) * integral_term
-
-                def M_integrand(theta):
-                    A = self.A_fn(theta)
-                    return torch.matrix_exp(A*self.tf)
-                M_t = avg_over_theta(M_integrand, self.thetas)
+                M_t = self.M(self.tf)
                 term2 = Phi_tf_t.T @ Ginv @ (xf[i] - M_t @ x0[i])
                 u_z[i, k] = term1 + term2
         return u_z
         
     def M(self, t):
-        A = self.A_fn(0)
-        M_integrand = torch.zeros_like(A)
-        for theta in self.thetas:
-            M_integrand += torch.matrix_exp(self.A_fn(theta)*t)
-        return torch.matrix_exp(A*t)
+        M_integrand = torch.stack([self.A_fn(theta)*t for theta in self.thetas])
+        M_integrand = torch.matrix_exp(M_integrand)
+        return M_integrand.mean(dim=0)
     
     def build_dataset(self, x0, u_z):
         N, _, nu = u_z.shape
@@ -117,7 +111,7 @@ class FlowMatchingSolver:
         return torch.stack(X), torch.stack(Y)
 
     class LSTMRegressor(nn.Module):
-        def __init__(self, input_dim, hidden_dim, output_dim, num_layers=1):
+        def __init__(self, input_dim, hidden_dim, output_dim, num_layers=2):
             super().__init__()
             self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
             self.fc = nn.Linear(hidden_dim, output_dim)
@@ -157,12 +151,12 @@ class FlowMatchingSolver:
         x = x0.clone()
         traj = torch.zeros(N, self.Nt+1, nx, device=self.device)
         traj[:, 0, :] = x
-        dW = torch.randn(self.Nt, nx, device=self.device)
+        dW = torch.randn(N, self.Nt, self.nu, device=self.device)
         for k, t in enumerate(self.t_grid[1:]): 
             noise_integral_term = torch.zeros([N, nx], device=self.device)
             for m, tau in enumerate(self.t_grid[:k+1]):
                 Phi_t_tau = self.compute_Phi(t, tau)
-                noise_integral_term += Phi_t_tau @ dW[m]*self.dt
+                noise_integral_term += (Phi_t_tau @ dW[:, m].T).T*self.dt
             noise_term = math.sqrt(self.epsilon)*noise_integral_term
             features = torch.cat([x0, t.unsqueeze(0).repeat(N,1), noise_term], dim=1)
             u = self.control_model(features.unsqueeze(1))
@@ -176,32 +170,33 @@ class FlowMatchingSolver:
         return traj, self.t_grid
 
 if __name__ == "__main__":
+    device = torch.device('cuda' if torch.cuda.is_available else 'cpu')
     '''
     example 2
     '''
     nx = 2   # dimension of the state
     nu = 2
-    A_fn = lambda theta: torch.tensor([[-theta, 0.0], [0.0, -theta]])
-    B_fn = lambda theta: torch.eye(nx)
+    A_fn = lambda theta: torch.tensor([[-theta, 0.0], [0.0, -theta]], device=device)
+    B_fn = lambda theta: torch.eye(nx, device=device)
 
     '''
     example 1
     '''
     #nx = 1 # dimension of x
     #nu =1  # dimension of u
-    #A_fn = lambda theta: torch.tensor([[0.0, -theta], [theta, 0]])
-    #B_fn = lambda theta: torch.eye(nx)
+    #A_fn = lambda theta: torch.tensor([[theta]], device=device)
+    #B_fn = lambda theta: torch.eye(nx, device=device)
 
     mu0 = MultivariateNormal(torch.zeros(nx), torch.eye(nx)) #initial distribution
     muf = MultivariateNormal(torch.ones(nx)*2, torch.eye(nx)) # target distribution
 
-    device = torch.device('cuda' if torch.cuda.is_available else 'cpu')
+
     print(f"using device {device}")
     # algorithm part
     print("Initialize solver")
-    solver = FlowMatchingSolver(A_fn, B_fn, mu0, muf, epsilon=0.1, tf=1.0, time_steps=10, device='cpu')
+    solver = FlowMatchingSolver(A_fn, B_fn, mu0, muf, nx, nu, epsilon=0.1, tf=1.0, time_steps=100, device=device)
     print("Sample from initial and target distribution")
-    x0_samples, xf_samples = solver.sample_pairs(N=100)
+    x0_samples, xf_samples = solver.sample_pairs(N=10)
     print("Compute the control")
     u_z = solver.compute_control_trajectories(x0_samples, xf_samples)
     print("Prepare for the data set")
@@ -209,8 +204,8 @@ if __name__ == "__main__":
     print("Start LSTM training")
     solver.train_control_law(X, Y)
     print("Test and get the trajectory with learned control")
-    n_sample = 100
-    x0_test = torch.zeros([n_sample, nx])
+    n_sample = 3
+    x0_test = torch.zeros([n_sample, nx], device=device)
     traj, t_grid = solver.simulate_x(x0_test)
     print("Simulation done. Start to plot graph")
     plot_trajectories(traj, t_grid)
