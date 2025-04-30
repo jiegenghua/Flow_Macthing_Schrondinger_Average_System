@@ -225,7 +225,7 @@ if __name__ == "__main__":
     print("Prepare for the data set")
     X, Y = solver.build_dataset(x0_samples, u_z)
     print("Start LSTM training")
-    loss = solver.train_control_law(X, Y, 'LSTM') # change it to MLP if you want to use MLP
+    loss = solver.train_control_law(X, Y, model_type='LSTM') # change it to MLP if you want to use MLP
     print("Test and get the trajectory with learned control")
     traj, t_grid = solver.simulate_x(x0_samples)
     print("Simulation done. Start to plot graph")
