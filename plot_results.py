@@ -75,6 +75,8 @@ def plot_initial_target_dis_1d(x0, xf, traj, log_dir):
     kdef = gaussian_kde(xf_pred)
     plt.hist(x0_pred, bins=30, density=True, alpha=0.4, label='initial')
     plt.hist(xf_pred, bins=30, density=True, alpha=0.4, label='target')
+    plt.hist(x0, bins=30, density=True, alpha=0.4, label='GT initial')
+    plt.hist(xf, bins=30, density=True, alpha=0.4, label='GT target')
     xs = np.linspace(x0_pred.min(), x0_pred.max(), 200)
     plt.plot(xs, kde0(xs), label='initial KDE')
     xs = np.linspace(xf_pred.min(), xf_pred.max(), 200)

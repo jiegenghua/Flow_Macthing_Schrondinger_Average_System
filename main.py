@@ -21,7 +21,7 @@ class FlowMatchingSolver:
                  epsilon=1e-2,
                  tf=1.0,
                  time_steps=100, # time steps for [0, tf]
-                 theta_samples=16, # number of samples for the perturbed parameter theta
+                 theta_samples=50, # number of samples for the perturbed parameter theta
                  device='cpu'):  # device can be gpu
         self.A_fn = A_fn
         self.B_fn = B_fn
@@ -35,7 +35,8 @@ class FlowMatchingSolver:
         self.dt = tf / time_steps
         self.t_grid = torch.linspace(0, tf, time_steps+1, device=device)
         self.device = device
-        self.thetas = [torch.rand(()).item() for _ in range(theta_samples)]
+        #self.thetas = [torch.rand(()).item() for _ in range(theta_samples)]
+        self.thetas = torch.linspace(0,1,theta_samples)
 
     def compute_Phi(self, t, tau):
         '''
@@ -62,7 +63,7 @@ class FlowMatchingSolver:
         xf = self.muf.sample((N,))
         return x0.to(self.device), xf.to(self.device)
 
-    def compute_control_trajectories(self, x0, xf):
+    def compute_control(self, x0, xf):
         # returns u_z trajectories: shape [N, Nt+1, dim]
         N, _ = x0.shape
         u_z = torch.zeros(N, self.Nt+1, self.nu, device=self.device)
@@ -107,7 +108,7 @@ class FlowMatchingSolver:
         return torch.stack(X), torch.stack(Y)
 
     class LSTMRegressor(nn.Module):
-        def __init__(self, input_dim, hidden_dim, output_dim, num_layers=1):
+        def __init__(self, input_dim, hidden_dim, output_dim, num_layers=2):
             super().__init__()
             self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
             self.fc = nn.Linear(hidden_dim, output_dim)
@@ -116,14 +117,31 @@ class FlowMatchingSolver:
             out, _ = self.lstm(x)
             return self.fc(out[:, -1, :])
 
+    class MLPRegressor(nn.Module):
+        def __init__(self, input_dim, hidden_dim, output_dim, num_layers=2):
+            super().__init__()
+            layers = []
+            layers.append(nn.Linear(input_dim, hidden_dim))
+            layers.append(nn.ReLU(inplace=True))
+            for _ in range(num_layers - 1):
+                layers.append(nn.Linear(hidden_dim, hidden_dim))
+                layers.append(nn.ReLU(inplace=True))
+            layers.append(nn.Linear(hidden_dim, output_dim))
+            self.net = nn.Sequential(*layers)
+
+        def forward(self, x):
+            u = self.net(x)
+            return u.squeeze(1)
+
     def train_control_law(self, X, Y,
                           hidden_dim=128,
                           lr=1e-3,
                           batch_size=128,
-                          epochs=200):
+                          epochs=1000):
         input_dim = X.size(1)
         output_dim = Y.size(1)
-        model = self.LSTMRegressor(input_dim, hidden_dim, output_dim).to(self.device)
+        #model = self.LSTMRegressor(input_dim, hidden_dim, output_dim).to(self.device)
+        model = self.MLPRegressor(input_dim, hidden_dim, output_dim, num_layers=2).to(self.device)
         optimizer = optim.Adam(model.parameters(), lr=lr)
         criterion = nn.MSELoss()
         dataset = torch.utils.data.TensorDataset(X.unsqueeze(1), Y)
@@ -189,16 +207,16 @@ if __name__ == "__main__":
     B_fn = lambda theta: torch.eye(nx, device=device)
 
     mu0 = MultivariateNormal(torch.zeros(nx), torch.eye(nx)) #initial distribution
-    muf = MultivariateNormal(torch.ones(nx)*2, torch.eye(nx)) # target distribution
+    muf = MultivariateNormal(torch.ones(nx)*6, torch.eye(nx)) # target distribution
 
     print(f"using device {device}")
     # algorithm part
     print("Initialize solver")
     solver = FlowMatchingSolver(A_fn, B_fn, mu0, muf, nx, nu, epsilon=0.01, tf=1.0, time_steps=10, device=device)
     print("Sample from initial and target distribution")
-    x0_samples, xf_samples = solver.sample_pairs(N=100)
+    x0_samples, xf_samples = solver.sample_pairs(N=1000)
     print("Compute the control")
-    u_z = solver.compute_control_trajectories(x0_samples, xf_samples)
+    u_z = solver.compute_control(x0_samples, xf_samples)
     print("Prepare for the data set")
     X, Y = solver.build_dataset(x0_samples, u_z)
     print("Start LSTM training")
