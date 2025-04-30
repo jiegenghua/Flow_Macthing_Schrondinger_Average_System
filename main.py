@@ -137,11 +137,16 @@ class FlowMatchingSolver:
                           hidden_dim=128,
                           lr=1e-3,
                           batch_size=128,
-                          epochs=1000):
+                          epochs=1000,
+                          model_type='LSTM'):
         input_dim = X.size(1)
         output_dim = Y.size(1)
-        #model = self.LSTMRegressor(input_dim, hidden_dim, output_dim).to(self.device)
-        model = self.MLPRegressor(input_dim, hidden_dim, output_dim, num_layers=2).to(self.device)
+        if model_type == 'LSTM':
+            model = self.LSTMRegressor(input_dim, hidden_dim, output_dim).to(self.device)
+        elif model_type == 'MLP':
+            model = self.MLPRegressor(input_dim, hidden_dim, output_dim, num_layers=2).to(self.device)
+        else:
+            print("Please choose from LSTM and MLP")
         optimizer = optim.Adam(model.parameters(), lr=lr)
         criterion = nn.MSELoss()
         dataset = torch.utils.data.TensorDataset(X.unsqueeze(1), Y)
@@ -220,7 +225,7 @@ if __name__ == "__main__":
     print("Prepare for the data set")
     X, Y = solver.build_dataset(x0_samples, u_z)
     print("Start LSTM training")
-    loss = solver.train_control_law(X, Y)
+    loss = solver.train_control_law(X, Y, 'LSTM') # change it to MLP if you want to use MLP
     print("Test and get the trajectory with learned control")
     traj, t_grid = solver.simulate_x(x0_samples)
     print("Simulation done. Start to plot graph")
