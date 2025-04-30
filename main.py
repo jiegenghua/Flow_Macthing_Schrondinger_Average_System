@@ -64,48 +64,52 @@ class FlowMatchingSolver:
         return x0.to(self.device), xf.to(self.device)
 
     def compute_control(self, x0, xf):
-        # returns u_z trajectories: shape [N, Nt+1, dim]
+        # returns u_z trajectories: shape [N, Nt+1, nu]
         N, _ = x0.shape
         u_z = torch.zeros(N, self.Nt+1, self.nu, device=self.device)
+        x_z = torch.zeros(N, self.Nt+1, self.nx, device=self.device)
         dW = torch.randn(N, self.Nt, nu, device=self.device) * math.sqrt(self.dt)
-
+        feature_noise = torch.zeros(N, self.Nt+1, self.nx, device=self.device)
         for k, t in enumerate(self.t_grid): # for every time step
             Phi_tf_t = self.compute_Phi(self.tf, t)
             G_tf_0 = self.compute_G(0)
             Ginv = torch.linalg.inv(G_tf_0 + 1e-6 * torch.eye(nu, device=self.device))
             integral_term = torch.zeros(N, nu, device=self.device)
+            Phi_t_tau_intergrand = torch.zeros(N, self.nx, device=self.device)
             for m, tau in enumerate(self.t_grid[:k]):
                 Phi_tf_tau = self.compute_Phi(self.tf, tau)
                 G_tf_tau = self.compute_G(tau)
                 G_tf_tau_inv = torch.linalg.inv(G_tf_tau+1e-6*torch.eye(nu, device=self.device))
                 integrand = Phi_tf_t.T @ G_tf_tau_inv @ Phi_tf_tau
                 integral_term += dW[:, m]@integrand
+                Phi_t_tau = self.compute_Phi(t, tau)
+                Phi_t_tau_intergrand += dW[:, m]@Phi_t_tau.T*math.sqrt(self.epsilon)
+            feature_noise[:, k] = Phi_t_tau_intergrand
             term1 = -math.sqrt(self.epsilon) * integral_term
             M_t = self.M(self.tf)
             term2 = (xf - x0.matmul(M_t.T))@Ginv.T@Phi_tf_t
             u_z[:, k] = term1 + term2
-        
-        return u_z
+            M_t = self.M(t)
+            u = u_z[:,k]
+            control_integral_term = torch.zeros([N, nx], device=self.device)
+            for m, tau in enumerate(self.t_grid[:k]):
+                Phi_t_tau = self.compute_Phi(t, tau)
+                control_integral_term += (Phi_t_tau @ (u.T)).T * self.dt
+            x_z[:, k] = (M_t @ x0.T).T + control_integral_term + feature_noise[:,k]
+
+        return u_z, feature_noise, x_z
         
     def M(self, t):
         M_integrand = torch.stack([self.A_fn(theta)*t for theta in self.thetas])
         M_integrand = torch.matrix_exp(M_integrand)
         return M_integrand.mean(dim=0)
     
-    def build_dataset(self, x0, u_z):
-        N, _, nu = u_z.shape
-        X = []
-        Y = []
-        for i in range(N):
-            Wint = torch.zeros_like(x0[i])
-            for k, t in enumerate(self.t_grid):
-                if k > 0:
-                    dW = torch.randn(nu, device=self.device) * math.sqrt(self.dt)
-                    Wint += torch.sqrt(torch.tensor(self.epsilon)) * (self.compute_Phi(t, self.t_grid[k-1]) @ dW)
-                input = torch.cat([x0[i], t.unsqueeze(0), Wint])
-                X.append(input)
-                Y.append(u_z[i, k])
-        return torch.stack(X), torch.stack(Y)
+    def build_dataset(self, x0, u_z, noise):
+        N, T, nu = u_z.shape
+        x0 = x0.unsqueeze(1).repeat(1, T, 1)
+        t_all = self.t_grid.view(1, T, 1).repeat(N,1,1)
+        X = torch.cat([x0, t_all,noise], dim=2)
+        return X, u_z
 
     class LSTMRegressor(nn.Module):
         def __init__(self, input_dim, hidden_dim, output_dim, num_layers=2):
@@ -115,7 +119,7 @@ class FlowMatchingSolver:
 
         def forward(self, x):
             out, _ = self.lstm(x)
-            return self.fc(out[:, -1, :])
+            return self.fc(out)
 
     class MLPRegressor(nn.Module):
         def __init__(self, input_dim, hidden_dim, output_dim, num_layers=2):
@@ -139,17 +143,18 @@ class FlowMatchingSolver:
                           batch_size=128,
                           epochs=1000,
                           model_type='LSTM'):
-        input_dim = X.size(1)
-        output_dim = Y.size(1)
+        input_dim = X.size(2)
+        output_dim = Y.size(2)
         if model_type == 'LSTM':
             model = self.LSTMRegressor(input_dim, hidden_dim, output_dim).to(self.device)
         elif model_type == 'MLP':
             model = self.MLPRegressor(input_dim, hidden_dim, output_dim, num_layers=2).to(self.device)
         else:
             print("Please choose from LSTM and MLP")
+
         optimizer = optim.Adam(model.parameters(), lr=lr)
         criterion = nn.MSELoss()
-        dataset = torch.utils.data.TensorDataset(X.unsqueeze(1), Y)
+        dataset = torch.utils.data.TensorDataset(X, Y)
         loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
         model.train()
         epoch_loss = []
@@ -163,7 +168,7 @@ class FlowMatchingSolver:
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item() * xb.size(0)
-            print(f"Epoch {epoch+1}/{epochs}, Average loss: {total_loss/len(dataset):.6f}")
+            #print(f"Epoch {epoch+1}/{epochs}, Average loss: {total_loss/len(dataset):.6f}")
             epoch_loss.append([epoch, total_loss/len(dataset)])
         self.control_model = model
         return epoch_loss
@@ -174,21 +179,21 @@ class FlowMatchingSolver:
         traj = torch.zeros(N, self.Nt+1, nx, device=self.device)
         traj[:, 0, :] = x
         dW = torch.randn(N, self.Nt, self.nu, device=self.device)*math.sqrt(self.dt)
-        for k, t in enumerate(self.t_grid[1:]): 
+        for k, t in enumerate(self.t_grid):
             noise_integral_term = torch.zeros([N, nx], device=self.device)
-            for m, tau in enumerate(self.t_grid[:k+1]):
+            for m, tau in enumerate(self.t_grid[:k]):
                 Phi_t_tau = self.compute_Phi(t, tau)
                 noise_integral_term += (Phi_t_tau @ dW[:, m].T).T
             noise_term = math.sqrt(self.epsilon)*noise_integral_term
             features = torch.cat([x0, t.unsqueeze(0).repeat(N,1), noise_term], dim=1)
-            u = self.control_model(features.unsqueeze(1))
+            u = self.control_model(features.unsqueeze(1)).squeeze(1)
             M_t = self.M(t)
             control_integral_term = torch.zeros([N, nx], device=self.device)
-            for m, tau in enumerate(self.t_grid[:k+1]):
+            for m, tau in enumerate(self.t_grid[:k]):
                 Phi_t_tau = self.compute_Phi(t, tau)
                 control_integral_term += (Phi_t_tau@(u.T)).T*self.dt
             x = (M_t@x0.T).T + control_integral_term + noise_term
-            traj[:, k+1, :] = x
+            traj[:, k, :] = x
         return traj, self.t_grid
 
 if __name__ == "__main__":
@@ -217,13 +222,13 @@ if __name__ == "__main__":
     print(f"using device {device}")
     # algorithm part
     print("Initialize solver")
-    solver = FlowMatchingSolver(A_fn, B_fn, mu0, muf, nx, nu, epsilon=0.01, tf=1.0, time_steps=10, device=device)
+    solver = FlowMatchingSolver(A_fn, B_fn, mu0, muf, nx, nu, epsilon=0.1, tf=1.0, time_steps=10, device=device)
     print("Sample from initial and target distribution")
     x0_samples, xf_samples = solver.sample_pairs(N=1000)
     print("Compute the control")
-    u_z = solver.compute_control(x0_samples, xf_samples)
+    u_z, noise, GT_traj = solver.compute_control(x0_samples, xf_samples)
     print("Prepare for the data set")
-    X, Y = solver.build_dataset(x0_samples, u_z)
+    X, Y = solver.build_dataset(x0_samples, u_z, noise)
     print("Start LSTM training")
     loss = solver.train_control_law(X, Y, model_type='LSTM') # change it to MLP if you want to use MLP
     print("Test and get the trajectory with learned control")
