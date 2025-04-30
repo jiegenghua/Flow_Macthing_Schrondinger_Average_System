@@ -5,7 +5,7 @@ from torch.distributions import MultivariateNormal
 import numpy as np
 import math
 import matplotlib.pyplot as plt
-from plot_results import plot_trajectories, plot_initial_target_dis_2d
+from plot_results import plot_trajectories, plot_initial_target_dis_2d, plot_loss, plot_initial_target_dis_1d
 
 '''
 Flow matching solver for stochatic averaged systems
@@ -107,7 +107,7 @@ class FlowMatchingSolver:
         return torch.stack(X), torch.stack(Y)
 
     class LSTMRegressor(nn.Module):
-        def __init__(self, input_dim, hidden_dim, output_dim, num_layers=2):
+        def __init__(self, input_dim, hidden_dim, output_dim, num_layers=1):
             super().__init__()
             self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
             self.fc = nn.Linear(hidden_dim, output_dim)
@@ -117,7 +117,7 @@ class FlowMatchingSolver:
             return self.fc(out[:, -1, :])
 
     def train_control_law(self, X, Y,
-                          hidden_dim=12,
+                          hidden_dim=128,
                           lr=1e-3,
                           batch_size=128,
                           epochs=200):
@@ -129,6 +129,7 @@ class FlowMatchingSolver:
         dataset = torch.utils.data.TensorDataset(X.unsqueeze(1), Y)
         loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
         model.train()
+        epoch_loss = []
         for epoch in range(epochs):
             total_loss = 0.0
             for xb, yb in loader:
@@ -140,7 +141,9 @@ class FlowMatchingSolver:
                 optimizer.step()
                 total_loss += loss.item() * xb.size(0)
             print(f"Epoch {epoch+1}/{epochs}, Average loss: {total_loss/len(dataset):.6f}")
+            epoch_loss.append([epoch, total_loss/len(dataset)])
         self.control_model = model
+        return epoch_loss
 
     def simulate_x(self, x0):
         N, nx = x0.shape
@@ -170,24 +173,23 @@ if __name__ == "__main__":
     '''
     example 2
     '''
-    sys = 'Example2'
-    nx = 2   # dimension of the state
-    nu = 2
-    A_fn = lambda theta: torch.tensor([[-theta, 0.0], [0.0, -theta]], device=device)
-    B_fn = lambda theta: torch.eye(nx, device=device)
+    #sys = 'Example2'
+    #nx = 2   # dimension of the state
+    #nu = 2
+    #A_fn = lambda theta: torch.tensor([[-theta, 0.0], [0.0, -theta]], device=device)
+    #B_fn = lambda theta: torch.eye(nx, device=device)
 
     '''
     example 1
     '''
-    # sys = 'Example1'
-    #nx = 1 # dimension of x
-    #nu =1  # dimension of u
-    #A_fn = lambda theta: torch.tensor([[theta]], device=device)
-    #B_fn = lambda theta: torch.eye(nx, device=device)
+    sys = 'Example1'
+    nx = 1 # dimension of x
+    nu =1  # dimension of u
+    A_fn = lambda theta: torch.tensor([[-theta]], device=device)
+    B_fn = lambda theta: torch.eye(nx, device=device)
 
     mu0 = MultivariateNormal(torch.zeros(nx), torch.eye(nx)) #initial distribution
     muf = MultivariateNormal(torch.ones(nx)*2, torch.eye(nx)) # target distribution
-
 
     print(f"using device {device}")
     # algorithm part
@@ -200,13 +202,17 @@ if __name__ == "__main__":
     print("Prepare for the data set")
     X, Y = solver.build_dataset(x0_samples, u_z)
     print("Start LSTM training")
-    solver.train_control_law(X, Y)
+    loss = solver.train_control_law(X, Y)
     print("Test and get the trajectory with learned control")
     traj, t_grid = solver.simulate_x(x0_samples)
     print("Simulation done. Start to plot graph")
     save_dir = f'./results/{sys}/'
     plot_trajectories(traj, t_grid, save_dir)
-    plot_initial_target_dis_2d(x0_samples, xf_samples, traj,t_grid, save_dir)
+    if sys == 'Example2':
+        plot_initial_target_dis_2d(x0_samples, xf_samples, traj,t_grid, save_dir)
+    elif sys== 'Example1':
+        plot_initial_target_dis_1d(x0_samples, xf_samples, traj, save_dir)
+    plot_loss(loss, save_dir)
     print('Figure saved in the results folder')
 
 
