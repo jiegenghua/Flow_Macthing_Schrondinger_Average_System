@@ -198,23 +198,11 @@ class FlowMatchingSolver:
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available else 'cpu')
-    '''
-    example 2
-    '''
-    #sys = 'Example2'
-    #nx = 2   # dimension of the state
-    #nu = 2
-    #A_fn = lambda theta: torch.tensor([[-theta, 0.0], [0.0, -theta]], device=device)
-    #B_fn = lambda theta: torch.eye(nx, device=device)
-
-    '''
-    example 1
-    '''
-    sys = 'Example1'
-    nx = 1 # dimension of x
-    nu =1  # dimension of u
-    A_fn = lambda theta: torch.tensor([[-theta]], device=device)
-    B_fn = lambda theta: torch.eye(nx, device=device)
+    sys_name = 1  # test different systems, 0: example 1, 1: example 2
+    if sys_name == 0:
+        from Sys1 import sys, nx, nu, A_fn, B_fn
+    else:
+        from Sys2 import sys, nx, nu, A_fn, B_fn
 
     mu0 = MultivariateNormal(torch.zeros(nx), torch.eye(nx)) #initial distribution
     muf = MultivariateNormal(torch.ones(nx)*6, torch.eye(nx)) # target distribution
