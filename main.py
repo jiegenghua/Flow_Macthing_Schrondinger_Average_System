@@ -10,6 +10,8 @@ from plot_results import plot_trajectories, plot_initial_target_dis_2d, plot_los
 '''
 Flow matching solver for stochatic averaged systems
 '''
+print('CUDA runtime version', torch.version.cuda)
+print('CUDA available', torch.cuda.is_available())
 class FlowMatchingSolver:
     def __init__(self,
                  A_fn,
@@ -197,7 +199,7 @@ class FlowMatchingSolver:
         return traj, self.t_grid
 
 if __name__ == "__main__":
-    device = torch.device('cuda' if torch.cuda.is_available else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     sys_name = 1  # test different systems, 0: example 1, 1: example 2
     if sys_name == 0:
         from Sys1 import sys, nx, nu, A_fn, B_fn
@@ -217,16 +219,16 @@ if __name__ == "__main__":
     u_z, noise, GT_traj = solver.compute_control(x0_samples, xf_samples)
     print("Prepare for the data set")
     X, Y = solver.build_dataset(x0_samples, u_z, noise)
-    print("Start LSTM training")
-    loss = solver.train_control_law(X, Y, model_type='LSTM') # change it to MLP if you want to use MLP
+    print("Start training")
+    loss = solver.train_control_law(X, Y, model_type='MLP') # change it to MLP if you want to use MLP
     print("Test and get the trajectory with learned control")
     traj, t_grid = solver.simulate_x(x0_samples)
     print("Simulation done. Start to plot graph")
     save_dir = f'./results/{sys}/'
     plot_trajectories(traj, t_grid, save_dir)
     if sys == 'Example2':
-        plot_initial_target_dis_2d(x0_samples, xf_samples, traj,t_grid, save_dir)
-    elif sys== 'Example1':
+        plot_initial_target_dis_2d(x0_samples, xf_samples, traj, t_grid, save_dir)
+    elif sys == 'Example1':
         plot_initial_target_dis_1d(x0_samples, xf_samples, traj, save_dir)
     plot_loss(loss, save_dir)
     print('Figure saved in the results folder')
