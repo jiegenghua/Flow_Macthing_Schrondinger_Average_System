@@ -2,6 +2,8 @@ Packages:
 * torch
 * matplotlib.pyplot
 * numpy
+* math
+* scipy
 
 ```commandline
 conda activate tf

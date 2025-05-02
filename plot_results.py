@@ -1,18 +1,31 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
+import torch.nn as nn
 import os
 from scipy.stats import gaussian_kde
 
 
-def plot_trajectories(traj, t_grid, log_dir):
+def plot_trajectories(traj, u, u_z, t_grid, log_dir):
     os.makedirs(log_dir, exist_ok=True)
-
+    _,T,control_dim = u.shape
+    mse_loss = nn.MSELoss()
+    loss_list = []
+    for j in range(T):
+        loss = mse_loss(u[:,j, :], u_z[:,j, :])
+        loss_list.append(loss.detach().cpu().numpy())
+        
+    plt.figure(figsize=(8,6))
+    plt.plot(loss_list)
+    plt.savefig(log_dir+f'u_distance.jpg')
     if torch.is_tensor(traj):
         traj = traj.detach().cpu().numpy()
+        u = u.detach().cpu().numpy()
+        u_z = u_z.detach().cpu().numpy()
         t_grid = t_grid.detach().cpu().numpy()
 
     n_samples, _, state_dim = traj.shape
+    _,T,control_dim = u.shape
     for dim in range(state_dim):
         plt.figure(figsize=(8,6))
         for sample in range(n_samples):
@@ -20,7 +33,19 @@ def plot_trajectories(traj, t_grid, log_dir):
             plt.xlabel(r'$t$')
             plt.ylabel(fr'$x_{dim}$')
             plt.savefig(log_dir+f'x{dim}.jpg')
+    '''
+    for dim in range(control_dim):
+        plt.figure(figsize=(8,6))
+        for sample in range(n_samples):
+            plt.plot(t_grid, u[sample,:, dim], label='real u')
+            plt.plot(t_grid, u_z[sample,:, dim], label='predicted u')
+            plt.legend()
+            plt.xlabel(r'$t$')
+            plt.ylabel(fr'$u_{dim}$')
+            plt.savefig(log_dir+f'u{dim}.jpg')
+    '''
 
+    
 
 def plot_initial_target_dis_2d(x0, xf, traj,t_grid, log_dir):
     os.makedirs(log_dir, exist_ok=True)
@@ -57,12 +82,13 @@ def plot_initial_target_dis_2d(x0, xf, traj,t_grid, log_dir):
     plt.ylabel("x2")
     plt.savefig(log_dir+'heatmap.jpg')
 
-def plot_initial_target_dis_1d(x0, xf, traj, log_dir):
+def plot_initial_target_dis_1d(x0, xf, GT_traj, traj, log_dir):
     os.makedirs(log_dir, exist_ok=True)
     if torch.is_tensor(traj):
         x0 =x0.detach().cpu().numpy()
         xf = xf.detach().cpu().numpy()
         traj = traj.detach().cpu().numpy()
+        GT_traj = GT_traj.detach().cpu().numpy()
     N, _ = x0.shape
     plt.figure(figsize=(8,6))
     for i in range(N):
@@ -71,10 +97,14 @@ def plot_initial_target_dis_1d(x0, xf, traj, log_dir):
     plt.plot(xf, np.zeros_like(xf), 'ro', markersize=2, label='target')
     x0_pred = traj[:,0,0]
     xf_pred = traj[:,-1,0]
+    GT_x0 = GT_traj[:,0,0]
+    GT_xf = GT_traj[:,-1,0]
     kde0 = gaussian_kde(x0_pred)
     kdef = gaussian_kde(xf_pred)
     plt.hist(x0_pred, bins=30, density=True, alpha=0.4, label='initial')
     plt.hist(xf_pred, bins=30, density=True, alpha=0.4, label='target')
+    plt.hist(GT_x0, bins=30, density=True, alpha=0.4, label='initial with real u')
+    plt.hist(GT_xf, bins=30, density=True, alpha=0.4, label='target with real u')
     plt.hist(x0, bins=30, density=True, alpha=0.4, label='GT initial')
     plt.hist(xf, bins=30, density=True, alpha=0.4, label='GT target')
     xs = np.linspace(x0_pred.min(), x0_pred.max(), 200)
