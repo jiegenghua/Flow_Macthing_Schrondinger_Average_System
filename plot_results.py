@@ -148,3 +148,7 @@ def visualize_2d(pts, label):
     grid = np.vstack([xx.ravel(), yy.ravel()])
     zz = kde(grid).reshape(xx.shape)
     plt.contour(xx, yy, zz, levels=6, colors='k', linewidths=1)
+
+
+
+    

@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from plot_results import plot_trajectories, plot_initial_target_dis_2d, plot_loss, plot_initial_target_dis_1d
 import os
 import sys
+from utils import sample_2G, sample_4G, Circle, HalfMoon
 
 '''
 Flow matching solver for stochatic averaged systems
@@ -18,8 +19,6 @@ class FlowMatchingSolver:
     def __init__(self,
                  A_fn,
                  B_fn,
-                 mu0,  # initial distribution
-                 muf,  # target distribution
                  nx,  # dimension of state
                  nu,  # dimension of control input
                  epsilon=1e-2,
@@ -29,8 +28,6 @@ class FlowMatchingSolver:
                  device='cpu'):  # device can be gpu
         self.A_fn = A_fn
         self.B_fn = B_fn
-        self.mu0 = mu0
-        self.muf = muf
         self.nx = nx
         self.nu = nu
         self.epsilon = epsilon
@@ -61,11 +58,6 @@ class FlowMatchingSolver:
                 Phi = self.compute_Phi(self.tf, tau)
                 G += Phi @ Phi.T * self.dt
         return G
-
-    def sample_pairs(self, N):
-        x0 = self.mu0.sample((N,))
-        xf = self.muf.sample((N,))
-        return x0.to(self.device), xf.to(self.device)
 
     def compute_control(self, x0, xf):
         # returns u_z trajectories: shape [N, Nt+1, nu]
@@ -112,7 +104,7 @@ class FlowMatchingSolver:
         N, T, nu = u_z.shape
         # x0 = x0.unsqueeze(1).repeat(1, T, 1)
         t_all = self.t_grid.view(1, T, 1).repeat(N, 1, 1)
-        X = torch.cat([x0, t_all], dim=2)
+        X = torch.cat([x0, t_all, noise], dim=2)
         return X, u_z
 
     class LSTMRegressor(nn.Module):
@@ -185,46 +177,77 @@ class FlowMatchingSolver:
         dW = torch.randn(N, self.Nt + 1, self.nu, device=self.device) * math.sqrt(self.dt)
         u_all = torch.zeros(N, self.Nt + 1, nu, device=self.device)
         u = torch.zeros(N, nu, device=self.device)
+
         for k, t in enumerate(self.t_grid):
             noise_integral_term = torch.zeros([N, nx], device=self.device)
-            control_integral_term = torch.zeros([N, nx], device=self.device)
             for m, tau in enumerate(self.t_grid[:k]):
                 Phi_t_tau = self.compute_Phi(t, tau)
                 noise_integral_term += (Phi_t_tau @ dW[:, m].T).T
-                features = torch.cat([x, tau.unsqueeze(0).repeat(N, 1)], dim=1)
-                u = self.control_model(features.unsqueeze(1)).squeeze(1)
-                control_integral_term += (Phi_t_tau @ (u.T)).T * self.dt
             noise_term = math.sqrt(self.epsilon) * noise_integral_term
+            features_seq = torch.cat([x, t.unsqueeze(0).repeat(N, 1), noise_term], dim=1)
+            # feed the feature into the model
+            u = self.control_model(features_seq)
             u_all[:, k, :] = u
+            
+            control_integral_term = torch.zeros([N, nx], device=self.device)
+            for m, tau in enumerate(self.t_grid[:k]):
+                Phi_t_tau = self.compute_Phi(t, tau)
+                control_integral_term += (Phi_t_tau @ (u_all[:, m].T)).T * self.dt
+            
             M_t = self.M(t)
             x = (M_t @ x0.T).T + control_integral_term + noise_term
             traj[:, k, :] = x
+        
         return traj, u_all, self.t_grid
 
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if len(sys.argv) !=2:
-        print("Please input 0: example 1, 1: example 2")
+    if len(sys.argv) !=4:
+        print("Please input the command as: python main_MLP.py 0 Gaussian Gaussian (2G, 4G, Circle)")
         sys.exit(1)
-    sys_id = sys.argv[1]
+    sys_id = sys.argv[1] # example id
+    init_dist = sys.argv[2] # initial distribution 
+    target_dist = sys.argv[3] # target distribution
+
+    N = 1000 # number of samples
     if sys_id == '0':
-        from Sys1 import sys_name, nx, nu, A_fn, B_fn
+        from Sys1 import sys_name, nx, nu, A_fn, B_fn, mu0, muf
     else:
         from Sys2 import sys_name, nx, nu, A_fn, B_fn
     
-    save_dir = os.path.join('.', 'results', sys_name)
-    print(f"The results will be saved in {save_dir}")
-
-    mu0 = MultivariateNormal(torch.zeros(nx), torch.eye(nx))  # initial distribution
-    muf = MultivariateNormal(torch.ones(nx) * 4, torch.eye(nx))  # target distribution
+    if init_dist == 'Gaussian':
+        mu0 = MultivariateNormal(torch.ones(nx)*-1, torch.eye(nx))  # initial distribution
+        x0_samples = mu0.sample((N,)).to(device)
+    elif init_dist == '2G':
+        x0_samples = sample_2G(N, nx, device).to(device)
+    elif init_dist == '4G':
+        x0_samples = sample_4G(N, nx, device).to(device)
+    elif init_dist =='Circle' and nx==2:
+        x0_samples = Circle(N, 2, device).to(device)
+    elif init_dist == 'HalfMoon':
+        x0_samples = HalfMoon(N, device).to(device)
+    else:
+        print("Please input a correct initial distribution (Gaussian, 2G, 4G, Circle, HalfMoon)")   
+    
+    if target_dist == 'Gaussian':
+        muf = MultivariateNormal(torch.ones(nx) * 4, torch.eye(nx))  # target distribution
+        xf_samples = muf.sample((N,)).to(device)
+    elif target_dist == '2G':
+        xf_samples = sample_2G(N, nx, device).to(device)
+    elif target_dist == '4G':
+        xf_samples = sample_4G(N, nx, device).to(device)
+    elif target_dist=='Circle' and nx==2:
+        xf_samples = Circle(N, 2, device).to(device)
+    elif target_dist == 'HalfMoon' and nx==2:
+        xf_samples = HalfMoon(N, device).to(device)
+    else:
+        print("Please input a correct target distribution (Gaussian, 2G, 4G, Circle, HalfMoon)")
 
     print(f"using device {device}")
     # algorithm part
     print("Initialize solver")
-    solver = FlowMatchingSolver(A_fn, B_fn, mu0, muf, nx, nu, epsilon=0.01, tf=1.0, time_steps=10, device=device)
-    print("Sample from initial and target distribution")
-    x0_samples, xf_samples = solver.sample_pairs(N=100)
+    solver = FlowMatchingSolver(A_fn, B_fn, nx, nu, epsilon=0.01, tf=1.0, time_steps=10, device=device)
     print("Compute the control")
     u, noise, GT_traj = solver.compute_control(x0_samples, xf_samples)
     print("Prepare for the data set")
@@ -234,7 +257,8 @@ if __name__ == "__main__":
     print("Test and get the trajectory with learned control")
     traj, u_z, t_grid = solver.simulate_x(x0_samples)
     print("Simulation done. Start to plot graph")
-
+    save_dir = os.path.join('.', 'results', sys_name, init_dist, target_dist)
+    print(f"The results will be saved in {save_dir}")
     plot_trajectories(traj, u, u_z, t_grid, save_dir)
     if sys_name == 'Example2':
         plot_initial_target_dis_2d(x0_samples, xf_samples, GT_traj, traj, t_grid, save_dir)

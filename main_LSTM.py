@@ -163,7 +163,7 @@ class FlowMatchingSolver:
     def train_control_law(self, X, Y,
                           hidden_dim=128,
                           lr=1e-3,
-                          batch_size=128,
+                          batch_size=32,
                           epochs=1000,
                           model_type='LSTM'):
         input_dim = X.size(2)
@@ -220,7 +220,8 @@ class FlowMatchingSolver:
             t_seq = torch.stack(t_history, dim=1)
             noise_seq = torch.stack(noise_history, dim=1)
             features_seq = torch.cat([x_seq, t_seq, noise_seq], dim=2)
-            # feed the feature into the model
+            # feed the feature into the model, including the history information
+            print(np.shape(features_seq))
             u = self.control_model(features_seq)
             u = u[:,-1,:] # we take the u of the last step
             u_all[:, k, :] = u
@@ -260,7 +261,7 @@ if __name__ == "__main__":
     print(f"using device {device}")
     # algorithm part
     print("Initialize solver")
-    solver = FlowMatchingSolver(A_fn, B_fn, mu0, muf, nx, nu, epsilon=0.01, tf=1.0, time_steps=100, device=device)
+    solver = FlowMatchingSolver(A_fn, B_fn, mu0, muf, nx, nu, epsilon=0.01, tf=1.0, time_steps=10, device=device)
     print("Sample from initial and target distribution")
     x0_samples, xf_samples = solver.sample_pairs(N=1000)
     print("Compute the control")
