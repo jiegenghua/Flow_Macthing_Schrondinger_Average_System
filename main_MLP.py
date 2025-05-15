@@ -5,7 +5,7 @@ from torch.distributions import MultivariateNormal
 import numpy as np
 import math
 import matplotlib.pyplot as plt
-from plot_results import plot_trajectories, plot_initial_target_dis_2d, plot_loss, plot_initial_target_dis_1d
+from plot_results import plot_trajectories, plot_initial_target_dis_2d, plot_loss, plot_initial_target_dis_1d, W2_2d, W2_1d
 import os
 import sys
 from utils import sample_2G, sample_4G, Circle, HalfMoon
@@ -262,8 +262,10 @@ if __name__ == "__main__":
     plot_trajectories(traj, u, u_z, t_grid, save_dir)
     if sys_name == 'Example2':
         plot_initial_target_dis_2d(x0_samples, xf_samples, GT_traj, traj, t_grid, save_dir)
+        W2_2d(x0_samples, xf_samples, GT_traj, traj, t_grid, save_dir)
     elif sys_name == 'Example1':
         plot_initial_target_dis_1d(x0_samples, xf_samples, GT_traj, traj, save_dir)
+        W2_1d(x0_samples, xf_samples, GT_traj, traj, t_grid, save_dir)
     plot_loss(loss, save_dir)
     print('Figure saved in the results folder')
 

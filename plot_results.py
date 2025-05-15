@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import os
 from scipy.stats import gaussian_kde
-
+import ot 
 
 def plot_trajectories(traj, u, u_z, t_grid, log_dir):
     os.makedirs(log_dir, exist_ok=True)
@@ -149,6 +149,58 @@ def visualize_2d(pts, label):
     zz = kde(grid).reshape(xx.shape)
     plt.contour(xx, yy, zz, levels=6, colors='k', linewidths=1)
 
-
-
+'''
+W2 distance
+'''
+def W2_2d(x0, xf, GT_traj, traj,t_grid, log_dir):
+    os.makedirs(log_dir, exist_ok=True)
+    n_samples, _, state_dim = traj.shape
+    if torch.is_tensor(traj):
+        x0 =x0.detach().cpu().numpy()
+        xf = xf.detach().cpu().numpy()
+        GT_traj = GT_traj.detach().cpu().numpy()
+        traj = traj.detach().cpu().numpy()
+        t_grid = t_grid.detach().cpu().numpy()
     
+    xf_pred = traj[:,-1, :]
+    w2_dist = []
+    a = np.ones(n_samples)/n_samples 
+    b = np.ones(n_samples)/n_samples
+    '''
+    dist_0 =  ot.dist(x0, xf_pred) 
+    w2_dist_norm = np.sqrt(ot.emd2(a, b, dist_0))
+    
+    T = len(t_grid)
+    for i in range(len(t_grid)):
+        if i% 10 ==0:
+            print(f'{i}/{T}')
+        dist =  ot.dist(x0[:,i,], xf_pred[:,i,]) 
+        w2_dist.append(np.sqrt(ot.emd2(a, b, dist))/w2_dist_norm)
+
+    plt.figure(figsize=(8,6 ))
+    plt.plot(t_grid, w2_dist,lw=2)
+    plt.xlabel(r'time')
+    plt.ylabel(r'$W_2$ distance')
+    plt.savefig(os.path.join(log_dir, 'W2.jpg'))
+    '''
+    M = ot.dist(xf, xf_pred, metric='euclidean')**2
+    w2_sq = ot.emd2(a, b, M)
+    w2 = np.sqrt(w2_sq)
+    print(f"2D W2 distance = {w2:.3f}")
+
+
+def W2_1d(x0, xf, GT_traj, traj,t_grid, log_dir):
+    os.makedirs(log_dir, exist_ok=True)
+    n_samples, _, state_dim = traj.shape
+    if torch.is_tensor(traj):
+        x0 =x0.detach().cpu().numpy()
+        xf = xf.detach().cpu().numpy()
+        GT_traj = GT_traj.detach().cpu().numpy()
+        traj = traj.detach().cpu().numpy()
+        t_grid = t_grid.detach().cpu().numpy()
+    
+    xf_pred = traj[:,-1, :]
+    a_sorted = np.sort(xf)
+    b_sorted = np.sort(xf_pred)
+    w2 = np.sqrt(np.mean((a_sorted - b_sorted)**2))
+    print(f"1D W2 distance = {w2:.3f}")
