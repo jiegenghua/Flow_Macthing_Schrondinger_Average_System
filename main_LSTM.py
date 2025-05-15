@@ -129,7 +129,6 @@ class FlowMatchingSolver:
 
     def build_dataset(self, x0, u_z, noise):
         N, T, nu = u_z.shape
-        # x0 = x0.unsqueeze(1).repeat(1, T, 1)
         t_all = self.t_grid.view(1, T, 1).repeat(N, 1, 1)
         X = torch.cat([x0, t_all, noise], dim=2)
         return X, u_z
@@ -216,34 +215,21 @@ class FlowMatchingSolver:
                 Phi_t_tau = self.compute_Phi(t, tau)
                 noise_integral_term += (Phi_t_tau @ dW[:, m].T).T
             noise_term = math.sqrt(self.epsilon) * noise_integral_term
-            x_seq = torch.stack(x_history, dim=1)
-            t_seq = torch.stack(t_history, dim=1)
-            noise_seq = torch.stack(noise_history, dim=1)
-            features_seq = torch.cat([x_seq, t_seq, noise_seq], dim=2)
-            # feed the feature into the model, including the history information
-            print(np.shape(features_seq))
+            features_seq = torch.cat([x, t.unsqueeze(0).repeat(N, 1), noise_term], dim=1)
             u = self.control_model(features_seq)
-            u = u[:,-1,:] # we take the u of the last step
             u_all[:, k, :] = u
-            
             control_integral_term = torch.zeros([N, nx], device=self.device)
             for m, tau in enumerate(self.t_grid[:k]):
                 Phi_t_tau = self.compute_Phi(t, tau)
                 control_integral_term += (Phi_t_tau @ (u_all[:, m].T)).T * self.dt
-            
             M_t = self.M(t)
             x = (M_t @ x0.T).T + control_integral_term + noise_term
             traj[:, k, :] = x
-            
-            noise_history.append(noise_term)
-            x_history.append(x)
-            t_history.append(torch.full((N,1), t, device=self.device))
         return traj, u_all, self.t_grid
-
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if len(sys.argv) !=2:
+    if len(sys.argv) != 2:
         print("Please input 0: example 1, 1: example 2")
         sys.exit(1)
     sys_id = sys.argv[1]

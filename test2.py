@@ -1,68 +1,88 @@
 import torch
+from torch.utils.data import Dataset, DataLoader
+
+import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import TensorDataset, DataLoader
-import matplotlib.pyplot as plt
 
-# 1) Generate synthetic data
-batch_size = 32
-sequence_length = 50
-dim = 3
-
-t = torch.linspace(0, 4 * torch.pi, sequence_length)
-base = torch.stack([
-    torch.sin(t + phase) for phase in torch.linspace(0, torch.pi, dim)
-], dim=1)  # (sequence_length, dim)
-
-data = base.unsqueeze(0).repeat(batch_size, 1, 1)  # (batch_size, sequence_length, dim)
-noise = 0.1 * torch.randn_like(data)
-data_noisy = data + noise  # (batch_size, sequence_length, dim)
-import numpy as np
-# 2) Dataset and DataLoader
-dataset = TensorDataset(data_noisy, data_noisy)   # autoencoder style
-loader = DataLoader(dataset, batch_size=8, shuffle=True)
-
-# 3) Define model
-class Seq2SeqLSTM(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_layers=1):
+class ControlLSTM(nn.Module):
+    def __init__(self, state_dim, hidden_dim, control_dim, num_layers=2):
         super().__init__()
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_dim, input_dim)
+        # input_dim = state_dim + 1 (for time)
+        self.lstm = nn.LSTM(state_dim, hidden_dim,
+                            num_layers=num_layers,
+                            batch_first=True)
+        # project hidden state to control
+        self.head = nn.Linear(hidden_dim, control_dim)
 
-    def forward(self, x):
-        # x: (B, S, dim)
-        out, _ = self.lstm(x)         
-        return self.fc(out)           # (B, S, dim)
+    def forward(self, x_seq):
+        """
+        x_seq: (B, S, state_dim)
+        t_seq: (B, S,    1     )
+        returns: u_pred of shape (B, S, control_dim)
+        """
+        # concatenate along feature axis
+        inp = x_seq      # (B, S, state_dim+1)
+        out, _ = self.lstm(inp)                      # (B, S, hidden_dim)
+        return self.head(out)                        # (B, S, control_dim)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = Seq2SeqLSTM(input_dim=dim, hidden_dim=16, num_layers=2).to(device)
-optimizer = optim.Adam(model.parameters(), lr=1e-3)
-criterion = nn.MSELoss()
+# -------------------
+# Example usage
+# -------------------
+if __name__ == "__main__":
+    # 1) Generate toy data
+    device = 'cpu'
+    t0, tf, T = 0.0, 1.0, 50
+    dt = (tf - t0) / (T - 1)
+    t_grid = torch.linspace(t0, tf, T)  # (T,)
+    N, nx, nu = 1000, 1, 1
+    x0 = torch.zeros(N, nx)
+    u_data = torch.ones(N, T, nu)*0.1
+    x_data = torch.zeros(N, T, nx)
+    x_data[:, 0, :] = x0
+    for k in range(1, T):
+        x_data[:, k, :] = x_data[:, k - 1, :] + dt * u_data[:, k - 1, :]
 
-# 4) Training loop
-num_epochs = 50
-loss_history = []
+    model = ControlLSTM(nx, hidden_dim=64, control_dim=nu).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+    loss_fn = nn.MSELoss()
+    batch_size = 32
+    for epoch in range(1, 50):
+        model.train()
+        total_loss = 0.0
+        B,_,_ = x_data.shape
+        perm = torch.randperm(B)
+        import numpy as np
+        for i in range(0, B):
+            idx = perm[i:i+batch_size]
+            xb = x_data[idx]
+            ub = u_data[idx]
+            #tb = t_grid.unsqueeze(0).expand(len(idx),-1,-1)
+            #print("ahahaha", np.shape(xb), np.shape(ub), np.shape(tb))
+            #inp_b = torch.cat([xb, tb], dim=2)
+            inp_b = xb
+            pred = model(inp_b)
+            # if predicting only last step:
+            # pred = pred[:, -1, :]                    # (B, nu)
+            loss = loss_fn(pred, ub)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            total_loss += loss.item() * len(idx)
+        print(f"Epoch {epoch}, Loss = {total_loss / B:.6f}")
 
-model.train()
-for epoch in range(1, num_epochs + 1):
-    epoch_loss = 0.0
-    for xb, yb in loader:
-        xb, yb = xb.to(device), yb.to(device)
-        preds = model(xb)
-        loss = criterion(preds, yb)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        epoch_loss += loss.item() * xb.size(0)
-    epoch_loss /= len(dataset)
-    loss_history.append(epoch_loss)
-    if epoch % 10 == 0 or epoch == 1:
-        print(f"Epoch {epoch}/{num_epochs}, Loss: {epoch_loss:.6f}")
+    import matplotlib.pyplot as plt
+    x0 = torch.zeros(N, nx)
+    u_data = torch.randn(N, T, nu)
+    x_data_new = torch.zeros(N, T, nx)
+    x_data_new[:, 0, :] = x0
+    for k in range(1, T):
+        u = model(x0).detach().numpy()
+        x_next = x0 + dt * u
+        x_data_new[:, k, :] = x_next
+        x0 = x_next[:]
 
-# 5) Plot loss
-plt.plot(loss_history, marker='o')
-plt.xlabel('Epoch')
-plt.ylabel('MSE Loss')
-plt.title('Training Loss')
-plt.grid(True)
-plt.show()
+    plt.figure(1)
+    plt.plot(t_grid, x_data[0, :, :], label='from real data')
+    plt.plot(t_grid, x_data_new[0, :, :], label='from learned model')
+    plt.legend()
+    plt.show()
