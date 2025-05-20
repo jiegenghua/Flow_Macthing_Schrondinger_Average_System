@@ -228,15 +228,14 @@ class FlowMatchingSolver:
         return traj, u_all, self.t_grid
 
 if __name__ == "__main__":
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if len(sys.argv) != 2:
         print("Please input 0: example 1, 1: example 2")
         sys.exit(1)
     sys_id = sys.argv[1]
     if sys_id == '0':
-        from Sys1 import sys_name, nx, nu, A_fn, B_fn
+        from Sys1 import sys_name, nx, nu, A_fn, B_fn, device
     else:
-        from Sys2 import sys_name, nx, nu, A_fn, B_fn
+        from Sys2 import sys_name, nx, nu, A_fn, B_fn, device
     
     save_dir = os.path.join('.', 'results', sys_name)
     print(f"The results will be saved in {save_dir}")

@@ -4,8 +4,13 @@ example 2
 import torch
 from torch.distributions import MultivariateNormal
 
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+if torch.cuda.is_available():
+    device = torch.device('cuda')
+elif torch.backends.mps.is_available():
+    device = torch.device('mps')
+else:
+    device = torch.device('cpu')
+    
 sys_name = 'Example2'
 nx = 2  # dimension of the state
 nu = 2 # dimension of the control
